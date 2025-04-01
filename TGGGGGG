@@ -1,0 +1,250 @@
+import os
+import telegram
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+import logging
+
+# 配置日志记录
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Bot configuration
+DEBUG = os.environ.get("DEBUG", "False").lower() == "true"
+# 假设这里维护一个管理员用户ID列表，实际使用中需根据情况动态维护
+ADMIN_USER_IDS = [123456, 789012]  # 示例管理员用户ID
+
+# 从环境变量中获取机器人API密钥，建议实际运行时设置为环境变量
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+if not TELEGRAM_BOT_TOKEN:
+    raise ValueError("TELEGRAM_BOT_TOKEN environment variable is not set.")
+
+# Default responses
+DEFAULT_WELCOME_MESSAGE = """<b>您好，欢迎加入！</b>
+请阅读群规并享受您的时光。
+如需帮助请联系群管理员。"""
+DEFAULT_HELP_MESSAGE = """
+可用命令：
+/start - 启动机器人并获取欢迎信息
+/help - 查看帮助信息
+/ban <用户名或用户ID> - 封禁指定用户
+/stats - 显示群组统计信息
+/auto_reply <关键词> <回复内容> - 设置自动回复
+"""
+
+# Keyword responses - 可以在此处添加自定义关键词响应，无需修改核心代码
+ADDITIONAL_KEYWORD_RESPONSES = {
+    "验群": "本群是真群！请注意看我的用户名是 @qunguan (群管拼音)，谨防假机器人。私聊我输入词语可以搜索真公群,如：卡商、白资、承兑等。请找[...]",
+    "真群": "本群是真群！请注意辨别真假，谨防诈骗。请找有头像的群管理员交易，切勿相信主动私聊你的用户。",
+    "防骗": "防骗提示：1. 不要轻信主动私聊的陌生人 2. 交易前核实对方身份 3. 使用安全的支付方式 4. 重要交易请通过群内有头像的管理员进行 5. 遇[...]",
+    "禁言": "本群已禁言，开群等待管理员通知",
+    "解除禁言": "本群已解除禁言，继续正常营业",
+    "公群导航": "公群导航 @hwgq 避免进假群\n公群流程 @gongqunLC 了解公群交易注意事项\n客服频道 @kefu 可以快速分辨工作人员\n\n另外可以私聊我发送公[...]",
+    "官方频道": "公群导航 @hwgq\n公群流程 @gongqunLC\n客服频道 @kefu\n\n请认准官方频道，避免被假冒账号诈骗。您可以私聊我进行群组搜索或导航。",
+    "客服": "您可以通过以下方式联系我们的客服：\n客服频道 @kefu\n\n请注意辨别真假客服，官方客服不会主动私聊您，也不会要求您先付款。",
+    "群介绍": "这是一个友好的交流群，我们欢迎大家分享知识和经验。请遵守群规，共同维护良好的交流环境。",
+    "如何提问": "请直接描述你的问题，尽量提供完整的信息，这样更容易得到有效的回答。避免'有人懂吗'这类模糊的提问方式。",
+    "发送文件": "可以直接在群里发送图片和文件，但请注意文件大小限制，大文件建议使用网盘链接分享。",
+    "常见问题": "请查看群置顶消息中的FAQ文档，那里有很多常见问题的解答。如果没有找到你需要的信息，可以在群里提问。",
+    "教程": "我们有一系列教程可供参考，请查看群公告或联系管理员获取相关链接。",
+    "文档": "官方文档是最权威的参考资料，建议先查阅文档，再提出具体问题。",
+    "新人指南": "欢迎加入！请先阅读群规，然后可以简单介绍一下自己。如有问题随时提出，我们会尽力帮助你。",
+    "灌水": "适当的闲聊是允许的，但请避免过度灌水，保持群组的主要讨论方向。",
+    "中秋": "中秋节快乐！愿你和家人团团圆圆，幸福美满！🥮🌕",
+    "国庆": "祝大家国庆节快乐！🎉",
+    "除夕": "除夕快乐！祝大家新年快乐，万事如意！🧧",
+    "无聊": "要不来聊聊你最近学到的有趣知识？或者分享一下你的兴趣爱好？",
+    "下班了": "终于等到这一刻！祝你有个愉快的下班时光～🎉",
+    "困了": "休息一下吧，注意劳逸结合才能更有效率哦！",
+    "饿了": "是时候犒劳一下自己，来顿美食吧！🍜",
+    "你好": "你好呀！很高兴和你交流，有什么问题都可以问我哦。"
+}
+
+# 私聊欢迎消息 - 完全匹配截图中的文本和样式
+PRIVATE_CHAT_WELCOME = """这里是好旺公群机器人
+公群导航 @hwgq 避免进假群
+公群流程 @gongqunLC 了解公群交易注意事项
+客服频道 @kefu 可以快速分辨工作人员
+另外可以私聊我发送公群编号直接获取进群方式，例如【123】；也可以输入词语进行搜索，如 卡商、代收、白资
+https://t.me/hwgq"""
+
+# 频道介绍消息 - 匹配截图中的样式
+CHANNEL_INFO = """<b>Telegram</b>
+好旺公群 @hwgq
+供求信息 @hwtb2
+新开公群 @xinqun
+核心大群 @daqun
+防骗指南 @hwtb22
+担保教程 @hwtb33
+联系好旺担保 @hwdb"""
+
+# 群组搜索数据库
+GROUP_DATABASE = {
+    "数字编号": {
+        "001": {
+            "name": "好旺官方公群",
+            "link": "https://t.me/+hwgq001",
+            "description": "好旺官方认证公群，安全可靠。",
+            "create_time": "2023-01-01",
+            "member_count": 100
+        },
+        "123": {
+            "name": "卡商交流群",
+            "link": "https://t.me/+abcdefg123456",
+            "description": "卡商交流与服务，严禁广告，管理严格。",
+            "create_time": "2023-02-01",
+            "member_count": 80
+        },
+        "168": {
+            "name": "好旺白资群",
+            "link": "https://t.me/+hwbaizi168",
+            "description": "好旺官方白资交流群，专业可靠。",
+            "create_time": "2023-03-01",
+            "member_count": 60
+        },
+        "188": {
+            "name": "好旺承兑群",
+            "link": "https://t.me/+hwchengdui188",
+            "description": "好旺官方承兑服务群，安全有保障。",
+            "create_time": "2023-04-01",
+            "member_count": 70
+        },
+        "199": {
+            "name": "好旺代收付群",
+            "link": "https://t.me/+hwdaishoufu199",
+            "description": "好旺官方代收代付群，安全有保障。",
+            "create_time": "2023-05-01",
+            "member_count": 90
+        },
+        "234": {
+            "name": "承兑服务群",
+            "link": "https://t.me/+bcdefgh234567",
+            "description": "专业承兑服务，请认准官方渠道。",
+            "create_time": "2023-06-01",
+            "member_count": 50
+        },
+        "345": {
+            "name": "代收代付群",
+            "link": "https://t.me/+cdefghi345678",
+            "description": "代收代付业务交流群，管理员统一有认证标识。",
+            "create_time": "2023-07-01",
+            "member_count": 65
+        },
+        "456": {
+            "name": "白资交流群",
+            "link": "https://t.me/+defghij456789",
+            "description": "白资业务交流群，注意防范风险。",
+            "create_time": "2023-08-01",
+            "member_count": 40
+        },
+        "666": {
+            "name": "好旺核心大群",
+            "link": "https://t.me/+hwdaqun666",
+            "description": "好旺官方核心大群，信息全面，管理严格。",
+            "create_time": "2023-09-01",
+            "member_count": 120
+        },
+        "789": {
+            "name": "商家联盟群",
+            "link": "https://t.me/+efghijk789012",
+            "description": "商家资源整合交流群，仅限认证商家。",
+            "create_time": "2023-10-01",
+            "member_count": 75
+        },
+        "888": {
+            "name": "好旺商家群",
+            "link": "https://t.me/+hwshj888",
+            "description": "好旺官方商家群，专业认证商家可加入。",
+            "create_time": "2023-11-01",
+            "member_count": 85
+        }
+    },
+    "关键词": {
+        "好旺": ["001", "168", "188", "199", "666", "888"],
+        "卡商": ["123", "789"],
+        "承兑": ["188", "234"],
+        "代收": ["199", "345"],
+        "代付": ["199", "345"],
+        "白资": ["168", "456"],
+        "商家": ["789", "888"],
+        "联盟": ["789"],
+        "核心": ["666"],
+        "大群": ["666"]
+    }
+}
+
+
+# 检查用户是否有执行操作的权限
+def check_permission(user_id):
+    return user_id in ADMIN_USER_IDS
+
+
+# 处理/start命令
+def start(update, context):
+    context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=DEFAULT_WELCOME_MESSAGE,
+        parse_mode=telegram.ParseMode.HTML
+    )
+
+
+# 处理/help命令
+def help_command(update, context):
+    context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=DEFAULT_HELP_MESSAGE,
+        parse_mode=telegram.ParseMode.HTML
+    )
+
+
+# 处理自动回复命令 /auto_reply <关键词> <回复内容>
+def auto_reply(update, context):
+    if check_permission(update.effective_user.id):
+        if len(context.args) < 2:
+            context.bot.send_message(chat_id=update.effective_chat.id, text="用法: /auto_reply <关键词> <回复内容>")
+            return
+        keyword = context.args[0].lower()
+        reply = " ".join(context.args[1:])
+        ADDITIONAL_KEYWORD_RESPONSES[keyword] = reply
+        context.bot.send_message(chat_id=update.effective_chat.id, text=f"自动回复已设置: {keyword} -> {reply}")
+    else:
+        context.bot.send_message(chat_id=update.effective_chat.id, text="你没有权限执行此操作。")
+
+
+# 处理普通消息
+def handle_message(update, context):
+    text = update.message.text.lower()
+    response = ADDITIONAL_KEYWORD_RESPONSES.get(text)
+    if response:
+        context.bot.send_message(chat_id=update.effective_chat.id, text=response)
+    else:
+        context.bot.send_message(chat_id=update.effective_chat.id, text="我不太理解你的意思哦。")
+
+
+def main():
+    try:
+        # 初始化机器人
+        updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
+        dispatcher = updater.dispatcher
+
+        # 添加命令处理程序
+        start_handler = CommandHandler('start', start)
+        dispatcher.add_handler(start_handler)
+
+        help_handler = CommandHandler('help', help_command)
+        dispatcher.add_handler(help_handler)
+
+        auto_reply_handler = CommandHandler('auto_reply', auto_reply)
+        dispatcher.add_handler(auto_reply_handler)
+
+        # 添加消息处理程序
+        message_handler = MessageHandler(Filters.text & (~Filters.command), handle_message)
+        dispatcher.add_handler(message_handler)
+
+        # 启动机器人
+        updater.start_polling()
+        logging.info("Bot started polling.")
+        updater.idle()
+    except Exception as e:
+        logging.error(f"An error occurred: {e}")
+
+
+if __name__ == "__main__":
+    main()
